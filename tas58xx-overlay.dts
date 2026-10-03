@@ -1,20 +1,10 @@
-// Definitions for Louder Raspberry
-// dtc -I dts -O dtb -o /boot/overlays/tas58xx.dtbo tas58xx-overlay.dts
-// bash: "sudo dtoverlay tas58xx <i2creg=...> <pdn_gpio=...> <firmware=...> <eq_mode=...> <mixer_mode=...> <bridge_mode=...> <fault_monitor=...>"
-// /boot/config.txt: "dtoverlay=tas58xx<,i2creg=...><,pdn_gpio=...><,firmware=...><,eq_mode=...><,mixer_mode=...><,bridge_mode=...><,fault_monitor=...>"
-// i2creg: TAS5805M@0x2c-0x2f (default 0x2d), TAS5825M@0x4c-0x4f
-// pdn_gpio: GPIO pin number for power down control (default: 4)
-// firmware: DSP config file name (optional)
-// eq_mode: 0=OFF, 1=15-band (default), 2=LF Crossover, 3=HF Crossover
-// mixer_mode: 0=Stereo (default), 1=Mono, 2=Left, 3=Right
-// bridge_mode: 0=off (default), 1=on
-// fault_monitor: 0=off, 1=on (default)
 /dts-v1/;
 /plugin/;
 
 / {
     compatible = "brcm,bcm2835";
 
+    /* --- ORIGINAL AUDIO: Fragment 0 --- */
     fragment@0 {
         target = <&i2s>;
         __overlay__ {
@@ -22,6 +12,7 @@
         };
     };
 
+    /* --- ORIGINAL AUDIO: Fragment 1 (Updated with your custom hardware specs) --- */
     fragment@1 {
         target = <&i2c1>;
         __overlay__ {
@@ -30,34 +21,23 @@
             #address-cells = <1>;
             #size-cells = <0>;
 
-            codec: tas58xx@reg {
+            codec: tas58xx@4c {
                 #sound-dai-cells = <0>;
                 compatible = "ti,tas58xx";
-                reg = <0x2d>;
-//              pvdd-supply = <&audiopwr>;
+                reg = <0x4c>;  /* Your custom I2C address */
                 pvdd-supply = <&vdd_3v3_reg>;
-                pdn-gpios = <&gpio 4 0>;
-                /* ti,modulation-mode: 0=BD, 1=1SPW, 2=Hybrid (default) */
-                ti,modulation-mode = <0>;
+                pdn-gpios = <&gpio 17 0>; /* Your custom Power Down GPIO17 */
                 
-                /* ti,switching-freq: 0=768K (default), 1=384K, 2=480K, 3=576K */
+                ti,modulation-mode = <2>; /* Set to Hybrid Mode for your LC Filter */
                 ti,switching-freq = <0>;
-                
-                /* ti,eq-mode: 0=OFF, 1=15-band (default), 2=LF Crossover (for subwoofer), 3=HF Crossover */
                 ti,eq-mode = <1>;
-                
-                /* ti,bridge-mode: enables PBTL/bridge mode (omit for normal stereo mode) */
-                /* ti,bridge-mode; */
-                
-                /* ti,mixer-mode: 0=Stereo (default), 1=Mono, 2=Left, 3=Right */
                 ti,mixer-mode = <0>;
-                
-                /* ti,fault-monitor: enables fault monitoring ALSA controls (enabled by default for single DAC) */
                 ti,fault-monitor;
             };
         };
     };
 
+    /* --- ORIGINAL AUDIO: Fragment 2 --- */
     fragment@2 {
         target = <&sound>;
         __overlay__ {
@@ -65,7 +45,6 @@
             compatible = "simple-audio-card";
             label = "Louder-Raspberry";
             simple-audio-card,dai-link {
-                /* DAC */
                 format = "i2s";
                 bitclock-master = <&dailink_master>;
                 frame-master = <&dailink_master>;
@@ -74,20 +53,93 @@
                         dai-tdm-slot-num = <2>;
                         dai-tdm-slot-width = <32>;
                 };
-            codec {
-                    sound-dai = <&codec>;
+                codec {
+                        sound-dai = <&codec>;
+                };
             };
         };
     };
 
-  };
+    /* --- MERGED FAN: Section 2 (GPIO12 Hardware PWM Fan Routing) --- */
+    fragment@3 {
+        target = <&gpio>;
+        __overlay__ {
+            pwm_pins: pwm_pins {
+                brcm,pins = <12>;      /* Targets your fan control on GPIO12 */
+                brcm,function = <4>;    /* Alt0 function routes it to Hardware PWM0 */
+            };
+        };
+    };
+
+    fragment@4 {
+        target = <&pwm>;
+        __overlay__ {
+            pinctrl-names = "default";
+            pinctrl-0 = <&pwm_pins>;
+            status = "okay";
+        };
+    };
+
+    /* --- MERGED FAN: Section 3 (40kHz Smart Thermal Profile with Lowered Temps) --- */
+    fragment@5 {
+        target-path = "/";
+        __overlay__ {
+            fan0: pwm-fan {
+                compatible = "pwm-fan";
+                cooldown-cells = <2>;
+                pwms = <&pwm 0 25000 0>; /* Your verified 40kHz profile */
+                cooling-levels = <0 26 128 255>;
+                #cooling-cells = <2>;
+                status = "okay";
+            };
+        };
+    };
+
+    fragment@6 {
+        target = <&cpu_thermal>;
+        __overlay__ {
+            trips {
+                fan_trip0: fan-trip0 {
+                    temperature = <40000>; /* Low idle trigger at 40°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+                fan_trip1: fan-trip1 {
+                    temperature = <48000>; /* Steps up to 50% speed at 48°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+                fan_trip2: fan-trip2 {
+                    temperature = <55000>; /* Transitions to 100% blast at 55°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+            };
+            cooling-maps {
+                map0 {
+                    trip = <&fan_trip0>;
+                    cooling-device = <&fan0 1 1>;
+                };
+                map1 {
+                    trip = <&fan_trip1>;
+                    cooling-device = <&fan0 2 2>;
+                };
+                map2 {
+                    trip = <&fan_trip2>;
+                    cooling-device = <&fan0 3 3>;
+                };
+            };
+        };
+    };
+
+    /* --- MANDATORY OVERRIDES: Kept intact for the driver controls --- */
     __overrides__ {
-            firmware = <&codec>,"ti,dsp-config-name";  
+            firmware = <&codec>,"ti,dsp-config-name";
             i2creg = <&codec>,"reg:<>";
-            pdn_gpio = <&codec>,"pdn-gpios:4";
-            eq_mode = <&codec>,"ti,eq-mode:0";
+            pdn_gpio = <&codec>,"pdn-gpios:17";
+            eq_mode = <&codec>,"ti,eq-mode:1";
             mixer_mode = <&codec>,"ti,mixer-mode:0";
             bridge_mode = <&codec>,"ti,bridge-mode?";
             fault_monitor = <&codec>,"ti,fault-monitor?";
     };
-};
+}; /* The absolute final closing brace for the whole file tree */
